@@ -194,12 +194,13 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 
 	mustClauses := []map[string]interface{}{}
 
-	// Text search on name and description
+	// Text search on name and description with fuzzy matching
 	if searchReq.Query != "" {
 		mustClauses = append(mustClauses, map[string]interface{}{
 			"multi_match": map[string]interface{}{
-				"query":  searchReq.Query,
-				"fields": []string{"name^2", "description"},
+				"query":     searchReq.Query,
+				"fields":    []string{"name^2", "description"},
+				"fuzziness": "AUTO",
 			},
 		})
 	}
