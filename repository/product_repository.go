@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"time"
 
 	"github.com/aditya/elasticsearch-products-api/models"
@@ -36,6 +38,8 @@ func (r *ProductRepository) Create(ctx context.Context, product *models.Product)
 		return fmt.Errorf("error marshaling product: %w", err)
 	}
 
+	log.Printf("[ES] CREATE - Index: %s, DocumentID: %s, Body: %s", r.indexName, product.ID, string(data))
+
 	req := esapi.IndexRequest{
 		Index:      r.indexName,
 		DocumentID: product.ID,
@@ -49,8 +53,11 @@ func (r *ProductRepository) Create(ctx context.Context, product *models.Product)
 	}
 	defer res.Body.Close()
 
+	resBody, _ := io.ReadAll(res.Body)
+	log.Printf("[ES] CREATE RESPONSE - Status: %d, Response: %s", res.StatusCode, string(resBody))
+
 	if res.IsError() {
-		return fmt.Errorf("error response: %s", res.String())
+		return fmt.Errorf("error response: %s", string(resBody))
 	}
 
 	return nil
@@ -58,6 +65,8 @@ func (r *ProductRepository) Create(ctx context.Context, product *models.Product)
 
 // GetByID retrieves a product by ID
 func (r *ProductRepository) GetByID(ctx context.Context, id string) (*models.Product, error) {
+	log.Printf("[ES] GET - Index: %s, DocumentID: %s", r.indexName, id)
+
 	req := esapi.GetRequest{
 		Index:      r.indexName,
 		DocumentID: id,
@@ -69,15 +78,18 @@ func (r *ProductRepository) GetByID(ctx context.Context, id string) (*models.Pro
 	}
 	defer res.Body.Close()
 
+	resBody, _ := io.ReadAll(res.Body)
+	log.Printf("[ES] GET RESPONSE - Status: %d, Response: %s", res.StatusCode, string(resBody))
+
 	if res.IsError() {
 		if res.StatusCode == 404 {
 			return nil, fmt.Errorf("product not found")
 		}
-		return nil, fmt.Errorf("error response: %s", res.String())
+		return nil, fmt.Errorf("error response: %s", string(resBody))
 	}
 
 	var result map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(resBody, &result); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
@@ -111,6 +123,8 @@ func (r *ProductRepository) Update(ctx context.Context, id string, product *mode
 		return fmt.Errorf("error marshaling product: %w", err)
 	}
 
+	log.Printf("[ES] UPDATE - Index: %s, DocumentID: %s, Body: %s", r.indexName, id, string(data))
+
 	req := esapi.IndexRequest{
 		Index:      r.indexName,
 		DocumentID: id,
@@ -124,8 +138,11 @@ func (r *ProductRepository) Update(ctx context.Context, id string, product *mode
 	}
 	defer res.Body.Close()
 
+	resBody, _ := io.ReadAll(res.Body)
+	log.Printf("[ES] UPDATE RESPONSE - Status: %d, Response: %s", res.StatusCode, string(resBody))
+
 	if res.IsError() {
-		return fmt.Errorf("error response: %s", res.String())
+		return fmt.Errorf("error response: %s", string(resBody))
 	}
 
 	return nil
@@ -133,6 +150,8 @@ func (r *ProductRepository) Update(ctx context.Context, id string, product *mode
 
 // Delete deletes a product by ID
 func (r *ProductRepository) Delete(ctx context.Context, id string) error {
+	log.Printf("[ES] DELETE - Index: %s, DocumentID: %s", r.indexName, id)
+
 	req := esapi.DeleteRequest{
 		Index:      r.indexName,
 		DocumentID: id,
@@ -145,11 +164,14 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 	}
 	defer res.Body.Close()
 
+	resBody, _ := io.ReadAll(res.Body)
+	log.Printf("[ES] DELETE RESPONSE - Status: %d, Response: %s", res.StatusCode, string(resBody))
+
 	if res.IsError() {
 		if res.StatusCode == 404 {
 			return fmt.Errorf("product not found")
 		}
-		return fmt.Errorf("error response: %s", res.String())
+		return fmt.Errorf("error response: %s", string(resBody))
 	}
 
 	return nil
@@ -219,12 +241,23 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 		}
 	}
 
+	// Apply custom scoring formula: FS = a * ³√(RS * b * (SS * d)) + log10((BS * d) + 1)
+	// RS=Relevance Score, SS=Stock Score, BS=Business Score, a=1.2, b=0.8, d=0.01
+	scoringQuery := map[string]interface{}{
+		"script_score": map[string]interface{}{
+			"query": query,
+			"script": map[string]interface{}{
+				"source": "Math.pow(_score * 0.8 * (Math.max(doc['stock'].value, 1) * 0.01), 1.0/3.0) * 1.2 + Math.log10((Math.max(doc['stock'].value, 1) * 0.01) + 1)",
+			},
+		},
+	}
+
 	searchBody := map[string]interface{}{
-		"query": query,
+		"query": scoringQuery,
 		"from":  from,
 		"size":  searchReq.PageSize,
 		"sort": []map[string]interface{}{
-			{"created_at": map[string]interface{}{"order": "desc"}},
+			{"_score": map[string]interface{}{"order": "desc"}},
 		},
 	}
 
@@ -232,6 +265,9 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 	if err := json.NewEncoder(&buf).Encode(searchBody); err != nil {
 		return nil, 0, fmt.Errorf("error encoding search query: %w", err)
 	}
+
+	queryStr := buf.String()
+	log.Printf("[ES] SEARCH - Index: %s, Query: %s", r.indexName, queryStr)
 
 	res, err := r.client.Search(
 		r.client.Search.WithContext(ctx),
@@ -243,12 +279,15 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 	}
 	defer res.Body.Close()
 
+	resBody, _ := io.ReadAll(res.Body)
+	log.Printf("[ES] SEARCH RESPONSE - Status: %d, Response: %s", res.StatusCode, string(resBody))
+
 	if res.IsError() {
-		return nil, 0, fmt.Errorf("error response: %s", res.String())
+		return nil, 0, fmt.Errorf("error response: %s", string(resBody))
 	}
 
 	var result map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(resBody, &result); err != nil {
 		return nil, 0, fmt.Errorf("error decoding response: %w", err)
 	}
 
