@@ -52,6 +52,27 @@ func CreateProductIndex(client *elasticsearch.Client, indexName string) error {
 
 	// Define index mapping
 	mapping := map[string]interface{}{
+		"settings": map[string]interface{}{
+			"analysis": map[string]interface{}{
+				"analyzer": map[string]interface{}{
+					"autocomplete": map[string]interface{}{
+						"tokenizer": "autocomplete_tokenizer",
+						"filter":    []string{"lowercase"},
+					},
+					"autocomplete_search": map[string]interface{}{
+						"tokenizer": "lowercase",
+					},
+				},
+				"tokenizer": map[string]interface{}{
+					"autocomplete_tokenizer": map[string]interface{}{
+						"type":        "edge_ngram",
+						"min_gram":    3,
+						"max_gram":    15,
+						"token_chars": []string{"letter", "digit"},
+					},
+				},
+			},
+		},
 		"mappings": map[string]interface{}{
 			"properties": map[string]interface{}{
 				"id": map[string]interface{}{
@@ -63,10 +84,22 @@ func CreateProductIndex(client *elasticsearch.Client, indexName string) error {
 						"keyword": map[string]interface{}{
 							"type": "keyword",
 						},
+						"autocomplete": map[string]interface{}{
+							"type":            "text",
+							"analyzer":        "autocomplete",
+							"search_analyzer": "autocomplete_search",
+						},
 					},
 				},
 				"description": map[string]interface{}{
 					"type": "text",
+					"fields": map[string]interface{}{
+						"autocomplete": map[string]interface{}{
+							"type":            "text",
+							"analyzer":        "autocomplete",
+							"search_analyzer": "autocomplete_search",
+						},
+					},
 				},
 				"price": map[string]interface{}{
 					"type": "float",
@@ -76,6 +109,27 @@ func CreateProductIndex(client *elasticsearch.Client, indexName string) error {
 				},
 				"stock": map[string]interface{}{
 					"type": "integer",
+				},
+				"rating": map[string]interface{}{
+					"type": "float",
+				},
+				"review_count": map[string]interface{}{
+					"type": "integer",
+				},
+				"sales_count": map[string]interface{}{
+					"type": "integer",
+				},
+				"view_count": map[string]interface{}{
+					"type": "integer",
+				},
+				"ctr": map[string]interface{}{
+					"type": "float",
+				},
+				"is_promoted": map[string]interface{}{
+					"type": "boolean",
+				},
+				"margin": map[string]interface{}{
+					"type": "float",
 				},
 				"created_at": map[string]interface{}{
 					"type": "date",

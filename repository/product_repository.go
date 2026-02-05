@@ -194,13 +194,14 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 
 	mustClauses := []map[string]interface{}{}
 
-	// Text search on name and description with fuzzy matching
+	// Text search on name and description with edge n-grams for autocomplete and fuzzy matching
 	if searchReq.Query != "" {
 		mustClauses = append(mustClauses, map[string]interface{}{
 			"multi_match": map[string]interface{}{
 				"query":     searchReq.Query,
-				"fields":    []string{"name^2", "description"},
+				"fields":    []string{"name.autocomplete^3", "name^2", "description.autocomplete", "description"},
 				"fuzziness": "AUTO",
+				"type":      "best_fields",
 			},
 		})
 	}
@@ -242,13 +243,51 @@ func (r *ProductRepository) Search(ctx context.Context, searchReq *models.Produc
 		}
 	}
 
-	// Apply custom scoring formula: FS = a * ³√(RS * b * (SS * d)) + log10((BS * d) + 1)
-	// RS=Relevance Score, SS=Stock Score, BS=Business Score, a=1.2, b=0.8, d=0.01
+	// Apply enhanced ecommerce scoring formula
+	// Components:
+	// 1. Base relevance (_score from text matching)
+	// 2. Stock availability (in-stock boost, out-of-stock penalty)
+	// 3. Rating boost (higher rated products rank higher)
+	// 4. Social proof (review count logarithmic boost)
+	// 5. Popularity (sales count logarithmic boost)
+	// 6. Engagement (CTR and view count)
+	// 7. Business rules (promoted products, margin)
 	scoringQuery := map[string]interface{}{
 		"script_score": map[string]interface{}{
 			"query": query,
 			"script": map[string]interface{}{
-				"source": "Math.pow(_score * 0.8 * (Math.max(doc['stock'].value, 1) * 0.01), 1.0/3.0) * 1.2 + Math.log10((Math.max(doc['stock'].value, 1) * 0.01) + 1)",
+				"source": `
+					// Base relevance score from text matching
+					double baseScore = _score;
+					
+					// Stock availability: out-of-stock = 0.3x penalty, in-stock = 1.0x
+					double stockMultiplier = doc['stock'].value > 0 ? 1.0 : 0.3;
+					
+					// Rating boost: normalize 0-5 rating to 0.6-1.2 multiplier
+					// (3 stars = 1.0x, 5 stars = 1.2x, 0 stars = 0.6x)
+					double ratingBoost = doc['review_count'].value > 0 
+						? 0.6 + (doc['rating'].value / 5.0) * 0.6 
+						: 1.0;
+					
+					// Social proof: logarithmic boost from review count
+					// More reviews = more trust (diminishing returns)
+					double reviewBoost = 1.0 + Math.log10(doc['review_count'].value + 1) * 0.1;
+					
+					// Popularity: logarithmic boost from sales count
+					// Best sellers rank higher
+					double popularityBoost = 1.0 + Math.log10(doc['sales_count'].value + 1) * 0.15;
+					
+					// Engagement: CTR and view count combined
+					// High CTR = users find it relevant
+					double engagementBoost = 1.0 + (doc['ctr'].value * 0.2) + (Math.log10(doc['view_count'].value + 1) * 0.05);
+					
+					// Business boost: promoted products + margin consideration
+					// Promoted products get 1.3x boost, high margin products get slight boost
+					double businessBoost = (doc['is_promoted'].value ? 1.3 : 1.0) * (1.0 + doc['margin'].value * 0.1);
+					
+					// Final score: combine all signals
+					return baseScore * stockMultiplier * ratingBoost * reviewBoost * popularityBoost * engagementBoost * businessBoost;
+				`,
 			},
 		},
 	}
