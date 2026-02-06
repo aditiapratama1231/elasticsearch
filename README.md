@@ -32,6 +32,106 @@ A production-ready RESTful API built with Go and Elasticsearch for managing prod
   - Business rules (promoted products, margins)
 - 📊 **Field Boosting**: Prioritizes matches in product names over descriptions
 
+## Scoring Algorithm
+
+The search ranking uses a **7-factor ecommerce scoring formula** that combines text relevance with business metrics:
+
+### Mathematical Formula
+
+```
+FRS = BS × S × R × Re × P × E × B
+```
+
+**Where:**
+
+| Component | Formula | Description |
+|-----------|---------|-------------|
+| **Base Score (BS)** | `BS = _score` | Elasticsearch BM25 text relevance score |
+| **Stock Multiplier (S)** | `S = stock > 0 ? 1.0 : 0.3` | Out-of-stock penalty (70% reduction) |
+| **Rating Boost (R)** | `R = 0.6 + (rating/5.0) × 0.6`<br/>*if review_count > 0* | Range: 0.6× (0★) to 1.2× (5★)<br/>Neutral at 3★ = 1.0× |
+| **Review Boost (Re)** | `Re = 1.0 + log₁₀(review_count + 1) × 0.1` | Social proof with logarithmic scaling |
+| **Popularity Boost (P)** | `P = 1.0 + log₁₀(sales_count + 1) × 0.15` | Best sellers rank higher |
+| **Engagement Boost (E)** | `E = 1.0 + (ctr × 0.2) + (log₁₀(view_count + 1) × 0.05)` | CTR + view count combined |
+| **Business Boost (B)** | `B = (promoted ? 1.3 : 1.0) × (1.0 + margin × 0.1)` | Promoted products get 30% boost + margin |
+
+### Scoring Example
+
+Product: **"Gaming Laptop"** with the following attributes:
+
+| Attribute | Value |
+|-----------|-------|
+| Text match score | 2.5 |
+| Stock | 50 (in stock) |
+| Rating | 5.0★ (300 reviews) |
+| Sales | 1000 units |
+| Views | 40,000 |
+| CTR | 0.15 (15%) |
+| Promoted | Yes |
+| Margin | 0.30 (30%) |
+
+**Step-by-step calculation:**
+
+```
+BS  = 2.5                                    (text relevance)
+S   = 1.0                                    (in stock)
+R   = 0.6 + (5.0/5.0) × 0.6 = 1.2           (5★ rating)
+Re  = 1.0 + log₁₀(301) × 0.1 = 1.248        (300 reviews)
+P   = 1.0 + log₁₀(1001) × 0.15 = 1.45       (1000 sales)
+E   = 1.0 + (0.15 × 0.2) + (log₁₀(40001) × 0.05) = 1.26
+B   = 1.3 × (1.0 + 0.30 × 0.1) = 1.339      (promoted + 30% margin)
+
+FRS = 2.5 × 1.0 × 1.2 × 1.248 × 1.45 × 1.26 × 1.339 = 8.95
+```
+
+**Result:** This product ranks **8.95×** higher than its base text relevance score!
+
+### Field Boosting
+
+Multi-match query uses the following field weights:
+- `name.autocomplete^3` - Highest priority (3x boost)
+- `name^2` - Standard name field (2x boost)
+- `description.autocomplete` - Description prefix matches
+- `description` - Standard description field
+
+This ensures product names are prioritized over descriptions in search results.
+
+## Stopping the Application
+
+1. Stop the Go application: `Ctrl+C`
+2. Stop Elasticsearch:
+```bash
+docker-compose down
+```
+
+To remove data volumes:
+```bash
+docker-compose down -v
+```
+
+## Troubleshooting
+
+### Elasticsearch Connection Error
+- Ensure Docker is running
+- Verify Elasticsearch is up: `docker-compose ps`
+- Check logs: `docker-compose logs elasticsearch`
+
+### Port Already in Use
+- Change `SERVER_PORT` in `.env`
+- Or stop the process using port 8080
+
+### Search Not Finding Results
+- Ensure products are indexed: `curl http://localhost:9200/products/_count`
+- Check minimum query length (min_gram = 3, requires at least 3 characters)
+- Verify field mappings: `curl http://localhost:9200/products/_mapping`
+
+### Score Too Low/High
+- Adjust coefficients in `repository/product_repository.go` scoring formula
+- Common adjustments:
+  - `ratingBoost`: Change `0.6 + (rating/5.0) * 0.6` multipliers
+  - `reviewBoost`: Adjust `0.1` coefficient for review impact
+  - `popularityBoost`: Adjust `0.15` coefficient for sales impact
+  - `businessBoost`: Change `1.3` for promoted product boost
+
 ## Project Structure
 
 ```
@@ -283,106 +383,6 @@ The products index uses the following mapping:
 **Autocomplete Search Analyzer** (searching):
 - Tokenizer: lowercase
 - Purpose: Prevents double n-gramming at search time
-
-## Scoring Algorithm
-
-The search ranking uses a **7-factor ecommerce scoring formula** that combines text relevance with business metrics:
-
-### Mathematical Formula
-
-```
-FRS = BS × S × R × Re × P × E × B
-```
-
-**Where:**
-
-| Component | Formula | Description |
-|-----------|---------|-------------|
-| **Base Score (BS)** | `BS = _score` | Elasticsearch BM25 text relevance score |
-| **Stock Multiplier (S)** | `S = stock > 0 ? 1.0 : 0.3` | Out-of-stock penalty (70% reduction) |
-| **Rating Boost (R)** | `R = 0.6 + (rating/5.0) × 0.6`<br/>*if review_count > 0* | Range: 0.6× (0★) to 1.2× (5★)<br/>Neutral at 3★ = 1.0× |
-| **Review Boost (Re)** | `Re = 1.0 + log₁₀(review_count + 1) × 0.1` | Social proof with logarithmic scaling |
-| **Popularity Boost (P)** | `P = 1.0 + log₁₀(sales_count + 1) × 0.15` | Best sellers rank higher |
-| **Engagement Boost (E)** | `E = 1.0 + (ctr × 0.2) + (log₁₀(view_count + 1) × 0.05)` | CTR + view count combined |
-| **Business Boost (B)** | `B = (promoted ? 1.3 : 1.0) × (1.0 + margin × 0.1)` | Promoted products get 30% boost + margin |
-
-### Scoring Example
-
-Product: **"Gaming Laptop"** with the following attributes:
-
-| Attribute | Value |
-|-----------|-------|
-| Text match score | 2.5 |
-| Stock | 50 (in stock) |
-| Rating | 5.0★ (300 reviews) |
-| Sales | 1000 units |
-| Views | 40,000 |
-| CTR | 0.15 (15%) |
-| Promoted | Yes |
-| Margin | 0.30 (30%) |
-
-**Step-by-step calculation:**
-
-```
-BS  = 2.5                                    (text relevance)
-S   = 1.0                                    (in stock)
-R   = 0.6 + (5.0/5.0) × 0.6 = 1.2           (5★ rating)
-Re  = 1.0 + log₁₀(301) × 0.1 = 1.248        (300 reviews)
-P   = 1.0 + log₁₀(1001) × 0.15 = 1.45       (1000 sales)
-E   = 1.0 + (0.15 × 0.2) + (log₁₀(40001) × 0.05) = 1.26
-B   = 1.3 × (1.0 + 0.30 × 0.1) = 1.339      (promoted + 30% margin)
-
-FRS = 2.5 × 1.0 × 1.2 × 1.248 × 1.45 × 1.26 × 1.339 = 8.95
-```
-
-**Result:** This product ranks **8.95×** higher than its base text relevance score!
-
-### Field Boosting
-
-Multi-match query uses the following field weights:
-- `name.autocomplete^3` - Highest priority (3x boost)
-- `name^2` - Standard name field (2x boost)
-- `description.autocomplete` - Description prefix matches
-- `description` - Standard description field
-
-This ensures product names are prioritized over descriptions in search results.
-
-## Stopping the Application
-
-1. Stop the Go application: `Ctrl+C`
-2. Stop Elasticsearch:
-```bash
-docker-compose down
-```
-
-To remove data volumes:
-```bash
-docker-compose down -v
-```
-
-## Troubleshooting
-
-### Elasticsearch Connection Error
-- Ensure Docker is running
-- Verify Elasticsearch is up: `docker-compose ps`
-- Check logs: `docker-compose logs elasticsearch`
-
-### Port Already in Use
-- Change `SERVER_PORT` in `.env`
-- Or stop the process using port 8080
-
-### Search Not Finding Results
-- Ensure products are indexed: `curl http://localhost:9200/products/_count`
-- Check minimum query length (min_gram = 3, requires at least 3 characters)
-- Verify field mappings: `curl http://localhost:9200/products/_mapping`
-
-### Score Too Low/High
-- Adjust coefficients in `repository/product_repository.go` scoring formula
-- Common adjustments:
-  - `ratingBoost`: Change `0.6 + (rating/5.0) * 0.6` multipliers
-  - `reviewBoost`: Adjust `0.1` coefficient for review impact
-  - `popularityBoost`: Adjust `0.15` coefficient for sales impact
-  - `businessBoost`: Change `1.3` for promoted product boost
 
 ## Performance Considerations
 
