@@ -290,64 +290,52 @@ The search ranking uses a **7-factor ecommerce scoring formula** that combines t
 
 ### Mathematical Formula
 
-$$FRS = BS \times S \times R \times Re \times P \times E \times B$$
+```
+FRS = BS × S × R × Re × P × E × B
+```
 
-Where:
+**Where:**
 
-**Base Score (BS)**
-$$BS = \text{_score}$$
-(Elasticsearch BM25 text relevance)
-
-**Stock Multiplier (S)**
-$$S = \begin{cases} 1.0 & \text{if stock} > 0 \\ 0.3 & \text{if stock} \leq 0 \end{cases}$$
-Out-of-stock products receive 70% penalty
-
-**Rating Boost (R)**
-$$R = \begin{cases} 0.6 + 0.12 \times rating & \text{if review\_count} > 0 \\ 1.0 & \text{if review\_count} = 0 \end{cases}$$
-Range: 0.6x (0★) to 1.2x (5★), neutral at 3★
-
-**Review Boost (Re)**
-$$Re = 1.0 + 0.1 \times \log_{10}(review\_count + 1)$$
-Social proof with logarithmic scaling (diminishing returns)
-
-**Popularity Boost (P)**
-$$P = 1.0 + 0.15 \times \log_{10}(sales\_count + 1)$$
-Best sellers rank higher
-
-**Engagement Boost (E)**
-$$E = 1.0 + 0.2 \times ctr + 0.05 \times \log_{10}(view\_count + 1)$$
-Combines click-through rate and view count
-
-**Business Boost (B)**
-$$B = \begin{cases} 1.3 \times (1.0 + 0.1 \times margin) & \text{if promoted} = true \\ 1.0 + 0.1 \times margin & \text{if promoted} = false \end{cases}$$
-Promoted products get 30% boost, plus margin consideration
+| Component | Formula | Description |
+|-----------|---------|-------------|
+| **Base Score (BS)** | `BS = _score` | Elasticsearch BM25 text relevance score |
+| **Stock Multiplier (S)** | `S = stock > 0 ? 1.0 : 0.3` | Out-of-stock penalty (70% reduction) |
+| **Rating Boost (R)** | `R = 0.6 + (rating/5.0) × 0.6`<br/>*if review_count > 0* | Range: 0.6× (0★) to 1.2× (5★)<br/>Neutral at 3★ = 1.0× |
+| **Review Boost (Re)** | `Re = 1.0 + log₁₀(review_count + 1) × 0.1` | Social proof with logarithmic scaling |
+| **Popularity Boost (P)** | `P = 1.0 + log₁₀(sales_count + 1) × 0.15` | Best sellers rank higher |
+| **Engagement Boost (E)** | `E = 1.0 + (ctr × 0.2) + (log₁₀(view_count + 1) × 0.05)` | CTR + view count combined |
+| **Business Boost (B)** | `B = (promoted ? 1.3 : 1.0) × (1.0 + margin × 0.1)` | Promoted products get 30% boost + margin |
 
 ### Scoring Example
 
 Product: **"Gaming Laptop"** with the following attributes:
-- Text match score: 2.5
-- Stock: 50 (in stock)
-- Rating: 5.0★ (300 reviews)
-- Sales: 1000 units
-- Views: 40,000
-- CTR: 0.15 (15%)
-- Promoted: Yes
-- Margin: 0.30 (30%)
 
-**Calculation:**
+| Attribute | Value |
+|-----------|-------|
+| Text match score | 2.5 |
+| Stock | 50 (in stock) |
+| Rating | 5.0★ (300 reviews) |
+| Sales | 1000 units |
+| Views | 40,000 |
+| CTR | 0.15 (15%) |
+| Promoted | Yes |
+| Margin | 0.30 (30%) |
+
+**Step-by-step calculation:**
+
 ```
-BS  = 2.5           (text relevance)
-S   = 1.0           (in stock)
-R   = 1.2           (5★ rating)
-Re  = 1.248         (300 reviews)
-P   = 1.45          (1000 sales)
-E   = 1.26          (15% CTR, 40K views)
-B   = 1.339         (promoted + 30% margin)
+BS  = 2.5                                    (text relevance)
+S   = 1.0                                    (in stock)
+R   = 0.6 + (5.0/5.0) × 0.6 = 1.2           (5★ rating)
+Re  = 1.0 + log₁₀(301) × 0.1 = 1.248        (300 reviews)
+P   = 1.0 + log₁₀(1001) × 0.15 = 1.45       (1000 sales)
+E   = 1.0 + (0.15 × 0.2) + (log₁₀(40001) × 0.05) = 1.26
+B   = 1.3 × (1.0 + 0.30 × 0.1) = 1.339      (promoted + 30% margin)
 
 FRS = 2.5 × 1.0 × 1.2 × 1.248 × 1.45 × 1.26 × 1.339 = 8.95
 ```
 
-This product would rank **8.95×** higher than its base text relevance score suggests!
+**Result:** This product ranks **8.95×** higher than its base text relevance score!
 
 ### Field Boosting
 
