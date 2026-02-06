@@ -1,6 +1,6 @@
 # Elasticsearch Products API
 
-A RESTful API built with Go and Elasticsearch for managing products with full CRUD operations and advanced search capabilities.
+A production-ready RESTful API built with Go and Elasticsearch for managing products with full CRUD operations and **advanced ecommerce search capabilities** including autocomplete, fuzzy matching, and intelligent ranking.
 
 ## Tech Stack
 
@@ -12,12 +12,25 @@ A RESTful API built with Go and Elasticsearch for managing products with full CR
 
 ## Features
 
+### Core Functionality
 - ✅ Create, Read, Update, Delete (CRUD) operations for products
 - ✅ Full-text search on product name and description
 - ✅ Filter by category and price range
 - ✅ Pagination support
 - ✅ RESTful API design
 - ✅ Elasticsearch integration with proper indexing
+
+### Advanced Search Features
+- 🔍 **Autocomplete**: Edge n-gram tokenization (3-15 characters) for prefix matching
+- 🎯 **Fuzzy Matching**: Typo-tolerant search with AUTO fuzziness
+- ⭐ **Intelligent Ranking**: Multi-signal scoring algorithm considering:
+  - Text relevance (BM25)
+  - Product ratings & reviews
+  - Sales velocity & popularity
+  - User engagement (CTR, views)
+  - Stock availability
+  - Business rules (promoted products, margins)
+- 📊 **Field Boosting**: Prioritizes matches in product names over descriptions
 
 ## Project Structure
 
@@ -97,9 +110,30 @@ Content-Type: application/json
   "description": "High-performance laptop for developers",
   "price": 1299.99,
   "category": "electronics",
-  "stock": 50
+  "stock": 50,
+  "rating": 4.5,
+  "review_count": 250,
+  "sales_count": 1200,
+  "view_count": 35000,
+  "ctr": 0.12,
+  "is_promoted": false,
+  "margin": 0.25
 }
 ```
+
+**Product Model Fields:**
+- `name` (required): Product name
+- `description`: Product description
+- `price` (required): Price in USD
+- `category` (required): Product category
+- `stock` (required): Available quantity
+- `rating`: Star rating (0-5)
+- `review_count`: Number of reviews
+- `sales_count`: Total sales
+- `view_count`: Product page views
+- `ctr`: Click-through rate (0-1)
+- `is_promoted`: Featured/promoted flag
+- `margin`: Profit margin (0-1)
 
 ### Get All Products
 ```bash
@@ -136,12 +170,27 @@ GET /api/v1/products/search?q=laptop&category=electronics&min_price=1000&max_pri
 ```
 
 Query parameters:
-- `q`: Search query (searches in name and description)
+- `q`: Search query (searches in name and description with autocomplete & fuzzy matching)
 - `category`: Filter by category
 - `min_price`: Minimum price
 - `max_price`: Maximum price
 - `page`: Page number (default: 1)
 - `page_size`: Items per page (default: 10)
+
+**Search Examples:**
+```bash
+# Autocomplete: "lap" matches "Laptop"
+curl "http://localhost:8080/api/v1/products/search?q=lap"
+
+# Fuzzy: "lptop" matches "Laptop" (typo tolerance)
+curl "http://localhost:8080/api/v1/products/search?q=lptop"
+
+# Multi-word: "gaming laptop"
+curl "http://localhost:8080/api/v1/products/search?q=gaming%20laptop"
+
+# With filters
+curl "http://localhost:8080/api/v1/products/search?q=laptop&category=electronics&min_price=500&max_price=2000"
+```
 
 ## Example Usage
 
@@ -168,6 +217,22 @@ curl "http://localhost:8080/api/v1/products/search?q=macbook&category=electronic
 curl "http://localhost:8080/api/v1/products?page=1&page_size=10"
 ```
 
+## Seeding Test Data
+
+Generate 100 realistic ecommerce products with varied ratings, reviews, and sales data:
+
+```bash
+go run cmd/seed/main.go
+```
+
+The seeder creates products with:
+- Random combinations of adjectives and product types
+- Weighted rating distribution (more 4-5★ products)
+- Correlated metrics (high ratings → more reviews/sales)
+- Realistic CTR values (2-15%)
+- 15% of products marked as promoted
+- Variable profit margins (15-45%)
+
 ## Development
 
 ### Run Tests
@@ -189,14 +254,110 @@ go build -o bin/api main.go
 
 The products index uses the following mapping:
 
+### Standard Fields
 - `id`: keyword
-- `name`: text with keyword field
-- `description`: text
+- `name`: text with keyword and autocomplete sub-fields
+- `description`: text with autocomplete sub-field
 - `price`: float
 - `category`: keyword
 - `stock`: integer
 - `created_at`: date
 - `updated_at`: date
+
+### Ecommerce Ranking Fields
+- `rating`: float (0-5 stars)
+- `review_count`: integer (social proof)
+- `sales_count`: integer (popularity)
+- `view_count`: integer (engagement)
+- `ctr`: float (click-through rate, 0-1)
+- `is_promoted`: boolean (business rule)
+- `margin`: float (profitability, 0-1)
+
+### Text Analyzers
+
+**Autocomplete Analyzer** (indexing):
+- Tokenizer: edge_ngram (min_gram: 3, max_gram: 15)
+- Filter: lowercase
+- Purpose: Enables prefix matching ("lap" → "Laptop")
+
+**Autocomplete Search Analyzer** (searching):
+- Tokenizer: lowercase
+- Purpose: Prevents double n-gramming at search time
+
+## Scoring Algorithm
+
+The search ranking uses a **7-factor ecommerce scoring formula** that combines text relevance with business metrics:
+
+### Mathematical Formula
+
+$$FRS = BS \times S \times R \times Re \times P \times E \times B$$
+
+Where:
+
+**Base Score (BS)**
+$$BS = \text{_score}$$
+(Elasticsearch BM25 text relevance)
+
+**Stock Multiplier (S)**
+$$S = \begin{cases} 1.0 & \text{if stock} > 0 \\ 0.3 & \text{if stock} \leq 0 \end{cases}$$
+Out-of-stock products receive 70% penalty
+
+**Rating Boost (R)**
+$$R = \begin{cases} 0.6 + 0.12 \times rating & \text{if review\_count} > 0 \\ 1.0 & \text{if review\_count} = 0 \end{cases}$$
+Range: 0.6x (0★) to 1.2x (5★), neutral at 3★
+
+**Review Boost (Re)**
+$$Re = 1.0 + 0.1 \times \log_{10}(review\_count + 1)$$
+Social proof with logarithmic scaling (diminishing returns)
+
+**Popularity Boost (P)**
+$$P = 1.0 + 0.15 \times \log_{10}(sales\_count + 1)$$
+Best sellers rank higher
+
+**Engagement Boost (E)**
+$$E = 1.0 + 0.2 \times ctr + 0.05 \times \log_{10}(view\_count + 1)$$
+Combines click-through rate and view count
+
+**Business Boost (B)**
+$$B = \begin{cases} 1.3 \times (1.0 + 0.1 \times margin) & \text{if promoted} = true \\ 1.0 + 0.1 \times margin & \text{if promoted} = false \end{cases}$$
+Promoted products get 30% boost, plus margin consideration
+
+### Scoring Example
+
+Product: **"Gaming Laptop"** with the following attributes:
+- Text match score: 2.5
+- Stock: 50 (in stock)
+- Rating: 5.0★ (300 reviews)
+- Sales: 1000 units
+- Views: 40,000
+- CTR: 0.15 (15%)
+- Promoted: Yes
+- Margin: 0.30 (30%)
+
+**Calculation:**
+```
+BS  = 2.5           (text relevance)
+S   = 1.0           (in stock)
+R   = 1.2           (5★ rating)
+Re  = 1.248         (300 reviews)
+P   = 1.45          (1000 sales)
+E   = 1.26          (15% CTR, 40K views)
+B   = 1.339         (promoted + 30% margin)
+
+FRS = 2.5 × 1.0 × 1.2 × 1.248 × 1.45 × 1.26 × 1.339 = 8.95
+```
+
+This product would rank **8.95×** higher than its base text relevance score suggests!
+
+### Field Boosting
+
+Multi-match query uses the following field weights:
+- `name.autocomplete^3` - Highest priority (3x boost)
+- `name^2` - Standard name field (2x boost)
+- `description.autocomplete` - Description prefix matches
+- `description` - Standard description field
+
+This ensures product names are prioritized over descriptions in search results.
 
 ## Stopping the Application
 
@@ -221,6 +382,38 @@ docker-compose down -v
 ### Port Already in Use
 - Change `SERVER_PORT` in `.env`
 - Or stop the process using port 8080
+
+### Search Not Finding Results
+- Ensure products are indexed: `curl http://localhost:9200/products/_count`
+- Check minimum query length (min_gram = 3, requires at least 3 characters)
+- Verify field mappings: `curl http://localhost:9200/products/_mapping`
+
+### Score Too Low/High
+- Adjust coefficients in `repository/product_repository.go` scoring formula
+- Common adjustments:
+  - `ratingBoost`: Change `0.6 + (rating/5.0) * 0.6` multipliers
+  - `reviewBoost`: Adjust `0.1` coefficient for review impact
+  - `popularityBoost`: Adjust `0.15` coefficient for sales impact
+  - `businessBoost`: Change `1.3` for promoted product boost
+
+## Performance Considerations
+
+- **Autocomplete**: Edge n-grams increase index size by ~30-50%
+- **Fuzzy matching**: Adds query latency (~10-20ms per query)
+- **Script scoring**: More expensive than standard relevance scoring
+- **Recommended**: Add caching layer (Redis) for popular queries
+- **Scaling**: Consider multiple Elasticsearch nodes for >100K products
+
+## Future Enhancements
+
+- [ ] Add synonym support (e.g., "phone" → "mobile", "smartphone")
+- [ ] Implement query suggestions (did you mean?)
+- [ ] Add faceted search (price ranges, rating buckets)
+- [ ] Real-time inventory updates via Elasticsearch update API
+- [ ] A/B testing framework for scoring formula optimization
+- [ ] Machine learning rank learning (LTR)
+- [ ] Personalized search based on user history
+- [ ] Multi-language support
 
 ## License
 
